@@ -5,7 +5,8 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from WikiWho.wikiwho import Wikiwho
+from WikiWho.wikiwho import Wikiwho, _match_word_sequences
+from WikiWho.utils import split_into_paragraphs
 
 FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
 
@@ -58,3 +59,54 @@ def test_token_authorship_matches_master(title):
         assert got == want, (
             f"token[{i}] ({got['str']!r}) mismatch:\n  got:  {got}\n  want: {want}"
         )
+
+
+def test_moved_words_before_link_are_recovered():
+    previous = (
+        [f"p{index}" for index in range(12)]
+        + ["lived", "in", "[[", "victoria", ",", "british", "columbia", "]]", "from", "1900"]
+        + [f"q{index}" for index in range(12)]
+    )
+    current = (
+        [f"q{index}" for index in range(12)]
+        + ["lived", "in", "[[", "victoria", ",", "british", "columbia", "]]", "from", "1900"]
+        + [f"p{index}" for index in range(12)]
+    )
+
+    mapping, _ = _match_word_sequences(
+        previous,
+        current,
+        full_text_prev=previous,
+        full_text_curr=current,
+    )
+
+    assert mapping[current.index("lived")] == previous.index("lived")
+
+
+def test_template_field_survives_spacing_change_and_move():
+    previous_row = [
+        "{{", "singlechart", "|", "switzerland", "|", "62", "|",
+        "artist", "=", "vanessa", "amorosi", "}}",
+    ]
+    current_row = [
+        "{{", "single", "chart", "|", "switzerland", "|", "62", "|",
+        "artist", "=", "vanessa", "amorosi", "}}",
+    ]
+    previous = previous_row + ["one", "thing", "leads", "2", "another"] + ["tail"] * 8
+    current = ["one", "thing", "leads", "2", "another"] + current_row + ["tail"] * 8
+
+    mapping, _ = _match_word_sequences(
+        previous,
+        current,
+        full_text_prev=previous,
+        full_text_curr=current,
+    )
+
+    assert mapping[current.index("switzerland")] == previous.index("switzerland")
+
+
+def test_inline_template_end_is_not_split_as_table_markup():
+    text = "{{linktext|偉大|}}한 {{linktext|遺産|}}"
+
+    assert split_into_paragraphs(text) == [text]
+    assert "{|\n| cell\n|}" in split_into_paragraphs("{|\n| cell\n|}")

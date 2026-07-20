@@ -42,7 +42,10 @@ def split_into_paragraphs(text):
     text = text.replace('<table>', '\n\n<table>').replace('</table>', '</table>\n\n')
     text = text.replace('<tr>', '\n\n<tr>').replace('</tr>', '</tr>\n\n')
     # wp table syntax
-    text = text.replace('{|', '\n\n{|').replace('|}', '|}\n\n')
+    text = text.replace('{|', '\n\n{|')
+    # Match table-closing markup only at line starts, preserving inline
+    # template endings such as `{{linktext|text|}}`.
+    text = re.sub(r'(?m)^([ \t]*\|\})', r'\1\n\n', text)
     text = text.replace('|-\n', '\n\n|-\n')
     return text.split('\n\n')
 
