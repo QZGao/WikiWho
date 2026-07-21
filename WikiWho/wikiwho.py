@@ -52,9 +52,14 @@ WORD_MATCH_CONF_EDGE = 100
 # Moved-run recovery looks for unique informative n-grams in unmatched diff regions. The sizes/caps below bound how much extra indexing we do per word diff while still finding copied or moved runs that SequenceMatcher misses.
 WORD_MATCH_MOVE_NGRAM_SIZES = (10, 8, 6, 4, 3)
 WORD_MATCH_MOVE_MIN_INFO_TOKENS = 3
-WORD_MATCH_MOVE_TOKEN_WINDOW = 4
+WORD_MATCH_MOVE_MIN_ANCHOR_INFO_TOKENS = 4
 WORD_MATCH_MOVE_MIN_RECOVERABLE_TOKENS = 24
 WORD_MATCH_MOVE_MAX_WINDOWS = 300000
+
+# Partial historical-sentence restoration needs enough unchanged context to make the old sentence identity stronger than the few token identities already occupied elsewhere.
+WORD_MATCH_HISTORICAL_MIN_AVAILABLE_TOKENS = 24
+WORD_MATCH_HISTORICAL_MAX_OCCUPIED_TOKENS = 2
+WORD_MATCH_HISTORICAL_MIN_EVIDENCE_RATIO = 4
 
 # A large pure deletion immediately before an unchanged suffix can otherwise keep very old glue words alive by edge matching. Limit that correction to the first suffix window so normal suffix preservation remains cheap.
 WORD_MATCH_EDGE_STALE_REWRITE_MIN_TOKENS = 24
@@ -628,10 +633,10 @@ def _link_anchor_bounds(tokens):
 
 def _copy_safe_moved_run(count_text_prev, count_text_curr, text_curr, curr_start, length, count_state):
     run = text_curr[curr_start:curr_start + length]
-    core = _longest_content_core(run)
-    if len(core) >= WORD_MATCH_MOVE_MIN_INFO_TOKENS:
-        return (_count_subsequence_cached(count_text_prev, core, count_state) == 1 and
-                _count_subsequence_cached(count_text_curr, core, count_state) == 1)
+    content_core = _longest_content_core(run)
+    if len(content_core) >= WORD_MATCH_MOVE_MIN_ANCHOR_INFO_TOKENS:
+        return (_count_subsequence_cached(count_text_prev, content_core, count_state) == 1 and
+                _count_subsequence_cached(count_text_curr, content_core, count_state) == 1)
     if _link_anchor_bounds(run) is None:
         return False
     return (_count_subsequence_cached(count_text_prev, run, count_state) == 1 and
@@ -659,37 +664,34 @@ def _has_unique_link_move_window(count_text_prev, count_text_curr, text_curr,
     return False
 
 
-def _content_run_bounds(tokens, index):
-    start = index
-    while start > 0 and _is_informative_move_token(tokens[start - 1]):
-        start -= 1
-    end = index + 1
-    while end < len(tokens) and _is_informative_move_token(tokens[end]):
-        end += 1
-    return start, end
+def _unique_moved_run_coverage(count_text_prev, count_text_curr, text_curr,
+                               run_start, run_end, count_state,
+                               minimum_informative=WORD_MATCH_MOVE_MIN_INFO_TOKENS):
+    run_length = run_end - run_start
+    max_window = min(run_length, max(WORD_MATCH_MOVE_NGRAM_SIZES))
+    if max_window < minimum_informative:
+        return set()
 
+    informative_prefix = [0]
+    informative_count = 0
+    for token in text_curr[run_start:run_end]:
+        if _is_informative_move_token(token):
+            informative_count += 1
+        informative_prefix.append(informative_count)
 
-def _has_unique_content_window(count_text_prev, count_text_curr, text_curr, curr_index, count_state):
-    if not _is_informative_move_token(text_curr[curr_index]):
-        return True
-
-    run_start, run_end = _content_run_bounds(text_curr, curr_index)
-    if run_end - run_start < WORD_MATCH_MOVE_TOKEN_WINDOW:
-        if run_end - run_start >= WORD_MATCH_MOVE_MIN_INFO_TOKENS:
-            needle = tuple(text_curr[run_start:run_end])
-            if any(any(char.isdigit() for char in token) for token in needle):
-                return (_count_subsequence_cached(count_text_prev, needle, count_state) == 1 and
-                        _count_subsequence_cached(count_text_curr, needle, count_state) == 1)
-        return False
-
-    earliest = max(run_start, curr_index - WORD_MATCH_MOVE_TOKEN_WINDOW + 1)
-    latest = min(curr_index, run_end - WORD_MATCH_MOVE_TOKEN_WINDOW)
-    for start in range(earliest, latest + 1):
-        needle = tuple(text_curr[start:start + WORD_MATCH_MOVE_TOKEN_WINDOW])
-        if (_count_subsequence_cached(count_text_prev, needle, count_state) == 1 and
-                _count_subsequence_cached(count_text_curr, needle, count_state) == 1):
-            return True
-    return False
+    covered = set()
+    for window_size in range(minimum_informative, max_window + 1):
+        for relative_start in range(run_length - window_size + 1):
+            relative_end = relative_start + window_size
+            if (informative_prefix[relative_end] - informative_prefix[relative_start] <
+                    minimum_informative):
+                continue
+            start = run_start + relative_start
+            needle = tuple(text_curr[start:start + window_size])
+            if (_count_subsequence_cached(count_text_prev, needle, count_state) == 1 and
+                    _count_subsequence_cached(count_text_curr, needle, count_state) == 1):
+                covered.update(range(start, start + window_size))
+    return covered
 
 
 def _can_assign_moved_match(match_conf, prev_used_by, curr_index, prev_index):
@@ -979,6 +981,12 @@ def _recover_moved_word_runs(text_prev, text_curr, prev_keys, curr_keys,
                 len(_longest_content_core(text_curr[curr_start:curr_start + length])) <
                 WORD_MATCH_MOVE_MIN_INFO_TOKENS
             )
+            covered = None
+            if not needs_link_context:
+                covered = _unique_moved_run_coverage(
+                    count_text_prev, count_text_curr, text_curr,
+                    curr_start, curr_start + length, count_state,
+                )
             for offset in range(length):
                 curr_index = curr_start + offset
                 if needs_link_context:
@@ -988,9 +996,7 @@ def _recover_moved_word_runs(text_prev, text_curr, prev_keys, curr_keys,
                             count_state,
                     ):
                         continue
-                elif not _has_unique_content_window(
-                        count_text_prev, count_text_curr, text_curr,
-                        curr_index, count_state):
+                elif curr_index not in covered:
                     continue
                 _assign_word_match(prev_for_curr, match_conf, prev_used_by,
                                    curr_index, prev_start + offset,
@@ -1095,6 +1101,24 @@ def _match_word_sequences(text_prev, text_curr, full_text_prev=None, full_text_c
     matched_prev = set(prev_index for prev_index in prev_for_curr if prev_index is not None)
     deleted_prev = [index for index in range(len(text_prev)) if index not in matched_prev]
     return prev_for_curr, deleted_prev
+
+
+def _can_partially_restore_historical_sentence(words, previous_revision_id):
+    available = [word for word in words if not word.matched]
+    occupied_count = len(words) - len(available)
+    if (occupied_count == 0 or
+            occupied_count > WORD_MATCH_HISTORICAL_MAX_OCCUPIED_TOKENS or
+            len(available) < WORD_MATCH_HISTORICAL_MIN_AVAILABLE_TOKENS or
+            len(available) < WORD_MATCH_HISTORICAL_MIN_EVIDENCE_RATIO * occupied_count):
+        return False
+    removal_revisions = {
+        word.outbound[-1]
+        for word in available
+        if word.outbound
+    }
+    return (len(removal_revisions) == 1 and
+            previous_revision_id not in removal_revisions and
+            all(word.outbound for word in available))
 
 
 class Wikiwho:
@@ -1626,6 +1650,39 @@ class Wikiwho:
                                 # if all prev words in this sentence are already matched
                                 sentence_prev.matched = True
                                 matched_sentences_prev.append(sentence_prev)
+                            elif _can_partially_restore_historical_sentence(
+                                    sentence_prev.words, self.revision_prev.id):
+                                # An exact historical sentence can return after a few of its
+                                # generic token objects have been reused elsewhere. Restore the
+                                # available identities and create new tokens only for occupied
+                                # positions instead of rejecting the entire sentence.
+                                sentence_reused = Sentence()
+                                sentence_reused.hash_value = hash_curr
+                                sentence_reused.value = sentence
+                                for word_prev in sentence_prev.words:
+                                    if word_prev.matched:
+                                        word_curr = Word()
+                                        word_curr.value = word_prev.value
+                                        word_curr.token_id = self.token_id
+                                        word_curr.origin_rev_id = self.revision_curr.id
+                                        word_curr.last_rev_id = self.revision_curr.id
+                                        sentence_reused.words.append(word_curr)
+                                        self.token_id += 1
+                                        self.revision_curr.original_adds += 1
+                                        self.tokens.append(word_curr)
+                                    else:
+                                        word_prev.matched = True
+                                        sentence_reused.words.append(word_prev)
+
+                                sentence_prev.matched = True
+                                matched_curr = True
+                                matched_sentences_prev.append(sentence_prev)
+                                if hash_curr in paragraph_curr.sentences:
+                                    paragraph_curr.sentences[hash_curr].append(sentence_reused)
+                                else:
+                                    paragraph_curr.sentences.update({hash_curr: [sentence_reused]})
+                                paragraph_curr.ordered_sentences.append(hash_curr)
+                                break
 
                 # If the sentence did not match,
                 # then include in the container of unmatched sentences for further analysis.

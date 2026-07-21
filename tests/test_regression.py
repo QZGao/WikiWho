@@ -5,7 +5,12 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from WikiWho.wikiwho import Wikiwho, _match_word_sequences
+from WikiWho.structures import Word
+from WikiWho.wikiwho import (
+    Wikiwho,
+    _can_partially_restore_historical_sentence,
+    _match_word_sequences,
+)
 from WikiWho.utils import split_into_paragraphs
 
 FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
@@ -103,6 +108,63 @@ def test_template_field_survives_spacing_change_and_move():
     )
 
     assert mapping[current.index("switzerland")] == previous.index("switzerland")
+
+
+def test_validated_move_recovers_tokens_across_punctuation():
+    moved = [
+        "|", "title", "=", "colosio", ",", "vizcaíno", ",", "marina", "y",
+        "cerqueda", ",", "las", "nuevas", "caras", "de", "la", "política", "en", "méxico",
+    ]
+    left = [f"left{index}" for index in range(16)]
+    right = [f"right{index}" for index in range(24)]
+    previous = left + moved + right
+    current = right + moved + left
+
+    mapping, _ = _match_word_sequences(
+        previous,
+        current,
+        full_text_prev=previous,
+        full_text_curr=current,
+    )
+
+    assert mapping[current.index("marina")] == previous.index("marina")
+
+
+def test_reference_markup_does_not_strengthen_a_weak_move_anchor():
+    moved = ["across", "the", "country", ".", "<", "ref", "name", "=", ":", "0", ">"]
+    left = [f"left{index}" for index in range(16)]
+    right = [f"right{index}" for index in range(24)]
+    previous = left + moved + right
+    current = right + moved + left
+
+    mapping, _ = _match_word_sequences(
+        previous,
+        current,
+        full_text_prev=previous,
+        full_text_curr=current,
+    )
+
+    assert mapping[current.index("across")] is None
+
+
+def test_delayed_sentence_reinsertion_can_restore_available_token_identities():
+    available = []
+    for index in range(33):
+        word = Word()
+        word.value = f"available{index}"
+        word.outbound.append(20)
+        available.append(word)
+    occupied = []
+    for value in (",", "of"):
+        word = Word()
+        word.value = value
+        word.matched = True
+        occupied.append(word)
+
+    words = available + occupied
+
+    assert _can_partially_restore_historical_sentence(words, previous_revision_id=21)
+    assert not _can_partially_restore_historical_sentence(words, previous_revision_id=20)
 
 
 def test_inline_template_end_is_not_split_as_table_markup():
