@@ -17,7 +17,10 @@ FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
 
 ARTICLES = [
     "Adam Himebauch",
+    "Luis Donaldo Colosio Riojas",
+    "One Thing Leads 2 Another",
     "Splatoon 3",
+    "The Tell-Tale Brain",
 ]
 
 
@@ -30,7 +33,7 @@ def load_fixture(title):
     golden_path = os.path.join(FIXTURES_DIR, f"{slug(title)}_golden.json")
     if not os.path.exists(rev_path) or not os.path.exists(golden_path):
         pytest.skip(
-            f"Fixtures missing for '{title}' — run 'python -m tests.generate_fixtures' on master first"
+            f"Fixtures missing for '{title}' — run 'python -m tests.generate_fixtures'"
         )
     with open(rev_path, encoding="utf-8") as f:
         revisions = json.load(f)
@@ -40,7 +43,7 @@ def load_fixture(title):
 
 
 @pytest.mark.parametrize("title", ARTICLES)
-def test_token_authorship_matches_master(title):
+def test_token_authorship_matches_golden(title):
     revisions, golden = load_fixture(title)
 
     ww = Wikiwho(title)
@@ -86,28 +89,6 @@ def test_moved_words_before_link_are_recovered():
     )
 
     assert mapping[current.index("lived")] == previous.index("lived")
-
-
-def test_template_field_survives_spacing_change_and_move():
-    previous_row = [
-        "{{", "singlechart", "|", "switzerland", "|", "62", "|",
-        "artist", "=", "vanessa", "amorosi", "}}",
-    ]
-    current_row = [
-        "{{", "single", "chart", "|", "switzerland", "|", "62", "|",
-        "artist", "=", "vanessa", "amorosi", "}}",
-    ]
-    previous = previous_row + ["one", "thing", "leads", "2", "another"] + ["tail"] * 8
-    current = ["one", "thing", "leads", "2", "another"] + current_row + ["tail"] * 8
-
-    mapping, _ = _match_word_sequences(
-        previous,
-        current,
-        full_text_prev=previous,
-        full_text_curr=current,
-    )
-
-    assert mapping[current.index("switzerland")] == previous.index("switzerland")
 
 
 def test_validated_move_recovers_tokens_across_punctuation():

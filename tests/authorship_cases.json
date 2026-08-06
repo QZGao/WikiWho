@@ -293,5 +293,63 @@
         }
       }
     ]
+  },
+  {
+    "title": "The Tell-Tale Brain",
+    "fixture": "fixtures/the_tell-tale_brain_revisions.json",
+    "history_through_revid": 466775504,
+    "snapshot_revid": 466775504,
+    "cases": [
+      {
+        "id": "tell_tale_brain_partial_historical_sentence_restore",
+        "context": "When VS Ramachandran, one of the",
+        "focus": ["When VS Ramachandran, one of the"],
+        "expected": {
+          "values": ["when", "vs", "ramachandran", ",", "one", "of", "the"],
+          "origin_rev_ids": [460801847, 460730548, 460730548, 466775504, 460730548, 466775504, 460730548],
+          "last_rev_ids": [466775504, 466775504, 466775504, 466775504, 466775504, 466775504, 466775504],
+          "inbound": [[466775504], [466775504], [466775504], [], [466775504], [], [466775504]],
+          "outbound": [[463754831], [463754831], [463754831], [], [463754831], [], [463754831]]
+        }
+      }
+    ]
+  },
+  {
+    "title": "Luis Donaldo Colosio Riojas",
+    "fixture": "fixtures/luis_donaldo_colosio_riojas_revisions.json",
+    "history_through_revid": 1222367802,
+    "snapshot_revid": 1222367802,
+    "cases": [
+      {
+        "id": "colosio_citation_title_move_across_punctuation",
+        "context": "|title=Colosio, Vizcaíno, Marina y Cerqueda, las nuevas caras de la política en México |url=",
+        "focus": ["Colosio, Vizcaíno, Marina y Cerqueda, las nuevas caras de la política en México"],
+        "expected": {
+          "values": ["colosio", ",", "vizcaíno", ",", "marina", "y", "cerqueda", ",", "las", "nuevas", "caras", "de", "la", "política", "en", "méxico"],
+          "origin_rev_ids": [1028074078, 1028074078, 1028074078, 1028074078, 1028074078, 1028074078, 1028074078, 1028074078, 1028074078, 1028074078, 1028074078, 1028074078, 1028074078, 1028074078, 1028074078, 1028074078],
+          "last_rev_ids": [1222367802, 1222367802, 1222367802, 1222367802, 1222367802, 1222367802, 1222367802, 1222367802, 1222367802, 1222367802, 1222367802, 1222367802, 1222367802, 1222367802, 1222367802, 1222367802]
+        }
+      }
+    ]
+  },
+  {
+    "title": "One Thing Leads 2 Another",
+    "fixture": "fixtures/one_thing_leads_2_another_revisions.json",
+    "history_through_revid": 1153115618,
+    "snapshot_revid": 1153115618,
+    "cases": [
+      {
+        "id": "one_thing_leads_2_another_template_spacing_preserves_field",
+        "context": "{{single chart|Switzerland|62|artist=Vanessa Amorosi|song=One Thing Leads 2 Another|accessdate",
+        "focus": ["Switzerland"],
+        "expected": {
+          "values": ["switzerland"],
+          "origin_rev_ids": [925279062],
+          "last_rev_ids": [1153115618],
+          "inbound": [[]],
+          "outbound": [[]]
+        }
+      }
+    ]
   }
 ]
