@@ -137,6 +137,23 @@
     ]
   },
   {
+    "title": "Bradshaw, West Virginia",
+    "fixture": "fixtures/bradshaw,_west_virginia_revisions.json",
+    "history_through_revid": 511877979,
+    "cases": [
+      {
+        "id": "bradshaw_bias_date_survives_unref_removal",
+        "snapshot_revid": 511877979,
+        "context": "{{bias|date=September 2012}}",
+        "focus": ["2012"],
+        "expected": {
+          "values": ["2012"],
+          "origin_rev_ids": [510854404]
+        }
+      }
+    ]
+  },
+  {
     "title": "Splatoon 3",
     "fixture": "fixtures/splatoon_3_revisions.json",
     "history_through_revid": 1007397695,
@@ -158,6 +175,56 @@
         "expected": {
           "values": ["[[", "category", ":", "video", "games", "developed", "in", "japan", "]]"],
           "origin_rev_ids": [1007397440, 1007397440, 1007397440, 1007397440, 1007397440, 1007397695, 1007397695, 1007397695, 1007397440]
+        }
+      }
+    ]
+  },
+  {
+    "title": "Yeah Yeah Yeahs (EP)",
+    "fixture": "fixtures/yeah_yeah_yeahs_(ep)_revisions.json",
+    "cases": [
+      {
+        "id": "yeah_lead_title_before_duplicate_lineage_loss",
+        "snapshot_revid": 687881195,
+        "context": "'''''Yeah Yeah Yeahs''''' (mislabeled as",
+        "focus": ["Yeah Yeah Yeahs"],
+        "expected": {
+          "values": ["yeah", "yeah", "yeahs"],
+          "token_ids": [5, 6, 7],
+          "origin_rev_ids": [1625540, 1625540, 1625540]
+        }
+      },
+      {
+        "id": "yeah_lead_title_survives_article_restructure",
+        "snapshot_revid": 748288963,
+        "context": "'''''Yeah Yeah Yeahs''''' is the debut [[Extended play|EP]] by American",
+        "focus": ["Yeah Yeah Yeahs"],
+        "expected": {
+          "values": ["yeah", "yeah", "yeahs"],
+          "token_ids": [5, 6, 7],
+          "origin_rev_ids": [1625540, 1625540, 1625540]
+        }
+      },
+      {
+        "id": "yeah_lead_title_survives_infobox_duplicate_removal",
+        "snapshot_revid": 865416272,
+        "context": "'''''Yeah Yeah Yeahs''''' is the debut [[Extended play|EP]] by American",
+        "focus": ["Yeah Yeah Yeahs"],
+        "expected": {
+          "values": ["yeah", "yeah", "yeahs"],
+          "token_ids": [5, 6, 7],
+          "origin_rev_ids": [1625540, 1625540, 1625540]
+        }
+      },
+      {
+        "id": "yeah_lead_title_retains_original_lineage_in_latest_revision",
+        "snapshot_revid": 1367918295,
+        "context": "'''''Yeah Yeah Yeahs''''' is the debut [[extended play]] (EP) by the American",
+        "focus": ["Yeah Yeah Yeahs"],
+        "expected": {
+          "values": ["yeah", "yeah", "yeahs"],
+          "token_ids": [5, 6, 7],
+          "origin_rev_ids": [1625540, 1625540, 1625540]
         }
       }
     ]
