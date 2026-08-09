@@ -148,6 +148,37 @@ def test_delayed_sentence_reinsertion_can_restore_available_token_identities():
     assert not _can_partially_restore_historical_sentence(words, previous_revision_id=20)
 
 
+def test_partially_restored_sentence_is_registered_for_future_reuse():
+    revisions, _ = load_fixture("The Tell-Tale Brain")
+    target_revid = 466775504
+    target_index = next(
+        index for index, revision in enumerate(revisions)
+        if revision["revid"] == target_revid
+    )
+    wikiwho = Wikiwho("The Tell-Tale Brain")
+    wikiwho.analyse_article(revisions[:target_index + 1])
+
+    prefix = ["\"", "when", "vs", "ramachandran", ",", "one", "of", "the"]
+    matching_sentences = []
+    revision = wikiwho.revisions[target_revid]
+    for paragraphs in revision.paragraphs.values():
+        for paragraph in paragraphs:
+            for sentences in paragraph.sentences.values():
+                for sentence in sentences:
+                    if [word.value for word in sentence.words[:len(prefix)]] == prefix:
+                        matching_sentences.append(sentence)
+
+    assert len(matching_sentences) == 1
+    restored = matching_sentences[0]
+    assert any(
+        candidate is restored
+        for candidate in wikiwho.sentences_ht[restored.hash_value]
+    )
+    assert wikiwho.sentences_ht[restored.hash_value][0] is restored
+    assert restored.value == ""
+    assert restored.splitted is None
+
+
 def test_inline_template_end_is_not_split_as_table_markup():
     text = "{{linktext|偉大|}}한 {{linktext|遺産|}}"
 
