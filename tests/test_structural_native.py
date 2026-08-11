@@ -35,6 +35,7 @@ def test_native_tokenizer_matches_python_contract(text):
     "x<table>y</table>z",
     "<tr>|-\n</tr>",
     "{|\n|-\n  |}\n",
+    "{{#if:1\n|yes\n|}}\nafter",
     "|-<tr>",
     "\n\n|-\n",
 ])

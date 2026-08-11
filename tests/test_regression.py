@@ -21,17 +21,21 @@ from WikiWho.wikiwho import (
     _duplicated_candidate_windows,
     _duplicated_candidate_windows_in_document,
     _duplicated_structural_candidate_windows,
+    _has_template_name_spacing_change,
     _matched_structural_anchor_occurrences,
     _match_word_sequences,
+    _pipe_key_changed_only_by_template_spacing,
     _propose_structural_word_matches,
     _propose_structural_word_matches_document,
     _propose_structural_word_matches_slots,
+    _recover_unique_template_field_words,
     _residual_structural_window_keys,
     _revision_structural_document,
     _structural_anchor_chains,
     _targeted_structural_anchor_occurrences,
+    _word_match_keys,
 )
-from WikiWho.utils import split_into_paragraphs
+from WikiWho.utils import iter_rev_tokens, split_into_paragraphs, split_into_tokens
 
 FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
 
@@ -87,6 +91,40 @@ def test_token_authorship_matches_golden(title):
         assert got == want, (
             f"token[{i}] ({got['str']!r}) mismatch:\n  got:  {got}\n  want: {want}"
         )
+
+
+def test_three_word_link_run_preserves_adam_authorship():
+    revisions, _ = load_fixture("Adam Himebauch")
+    previous_revision_id = 748557058
+    current_revision_id = 754869525
+    current_index = next(
+        index for index, revision in enumerate(revisions)
+        if revision["revid"] == current_revision_id
+    )
+    wikiwho = Wikiwho("Adam Himebauch")
+    wikiwho.analyse_article(revisions[:current_index + 1])
+    phrase = (
+        "a", "building", "in", "[[", "little", "italy", ",",
+        "manhattan", "|", "little", "italy", "]]",
+    )
+
+    def phrase_words(revision_id):
+        words = list(iter_rev_tokens(wikiwho.revisions[revision_id]))
+        values = tuple(word.value for word in words)
+        starts = [
+            start for start in range(len(values) - len(phrase) + 1)
+            if values[start:start + len(phrase)] == phrase
+        ]
+        assert len(starts) == 1
+        return words[starts[0]:starts[0] + len(phrase)]
+
+    previous_words = phrase_words(previous_revision_id)
+    current_words = phrase_words(current_revision_id)
+
+    assert [word.token_id for word in current_words] == [
+        word.token_id for word in previous_words
+    ]
+    assert {word.origin_rev_id for word in current_words} == {678462685}
 
 
 def test_moved_words_before_link_are_recovered():
@@ -842,6 +880,87 @@ def test_single_map_structural_evidence_matches_independent_global_states():
     ) == expected_duplicates
 
 
+def test_link_pipe_keys_do_not_trigger_template_spacing_recovery():
+    previous_link = [
+        token.lower()
+        for token in split_into_tokens("[[File:Foo bar.jpg|thumb|caption]]")
+    ]
+    current_link = [
+        token.lower()
+        for token in split_into_tokens("[[File:Foobar.jpg|thumb|caption]]")
+    ]
+    previous_keys = _word_match_keys(previous_link)
+    current_keys = _word_match_keys(current_link)
+    previous_pipes = [
+        key for token, key in zip(previous_link, previous_keys) if token == "|"
+    ]
+    current_pipes = [
+        key for token, key in zip(current_link, current_keys) if token == "|"
+    ]
+
+    assert len(previous_pipes) == len(current_pipes) == 2
+    assert not _has_template_name_spacing_change(previous_keys, current_keys)
+    assert all(
+        not _pipe_key_changed_only_by_template_spacing(previous_key, current_key)
+        for previous_key, current_key in zip(previous_pipes, current_pipes)
+    )
+
+    previous = (
+        [f"previous{index}" for index in range(8)]
+        + previous_link
+        + [f"suffix{index}" for index in range(8)]
+    )
+    current = (
+        [f"current{index}" for index in range(8)]
+        + current_link
+        + [f"ending{index}" for index in range(8)]
+    )
+    ledger = _MatchCandidateLedger(len(previous), len(current))
+    _recover_unique_template_field_words(
+        previous,
+        current,
+        _word_match_keys(previous),
+        _word_match_keys(current),
+        ledger,
+        full_text_prev=previous,
+        full_text_curr=current,
+        count_state={"counts": {}},
+    )
+    mapping, _ = ledger.resolve()
+
+    assert mapping[current.index("thumb")] is None
+
+
+def test_template_pipe_keys_still_detect_template_name_spacing_change():
+    previous = [
+        token.lower()
+        for token in split_into_tokens("{{single chart|country=switzerland|62}}")
+    ]
+    current = [
+        token.lower()
+        for token in split_into_tokens("{{singlechart|country=switzerland|62}}")
+    ]
+    previous_keys = _word_match_keys(previous)
+    current_keys = _word_match_keys(current)
+    previous_pipes = [
+        key for token, key in zip(previous, previous_keys) if token == "|"
+    ]
+    current_pipes = [
+        key for token, key in zip(current, current_keys) if token == "|"
+    ]
+
+    assert len(previous_pipes) == len(current_pipes) == 2
+    assert {key[2] for key in previous_pipes} == {
+        "template-field",
+        "template-arg",
+    }
+    assert _has_template_name_spacing_change(previous_keys, current_keys)
+    assert all(
+        _pipe_key_changed_only_by_template_spacing(previous_key, current_key)
+        for previous_key, current_key in zip(previous_pipes, current_pipes)
+    )
+
+
 def test_delayed_sentence_reinsertion_can_restore_available_token_identities():
     available = []
     for index in range(33):
@@ -862,11 +981,48 @@ def test_delayed_sentence_reinsertion_can_restore_available_token_identities():
     assert not _can_partially_restore_historical_sentence(words, previous_revision_id=20)
 
 
+def test_partially_restored_sentence_is_registered_for_future_reuse():
+    revisions, _ = load_fixture("The Tell-Tale Brain")
+    target_revid = 466775504
+    target_index = next(
+        index for index, revision in enumerate(revisions)
+        if revision["revid"] == target_revid
+    )
+    wikiwho = Wikiwho("The Tell-Tale Brain")
+    wikiwho.analyse_article(revisions[:target_index + 1])
+
+    prefix = ["\"", "when", "vs", "ramachandran", ",", "one", "of", "the"]
+    matching_sentences = []
+    revision = wikiwho.revisions[target_revid]
+    for paragraphs in revision.paragraphs.values():
+        for paragraph in paragraphs:
+            for sentences in paragraph.sentences.values():
+                for sentence in sentences:
+                    if [word.value for word in sentence.words[:len(prefix)]] == prefix:
+                        matching_sentences.append(sentence)
+
+    assert len(matching_sentences) == 1
+    restored = matching_sentences[0]
+    assert any(
+        candidate is restored
+        for candidate in wikiwho.sentences_ht[restored.hash_value]
+    )
+    assert wikiwho.sentences_ht[restored.hash_value][0] is restored
+    assert restored.value == ""
+    assert restored.splitted is None
+
+
 def test_inline_template_end_is_not_split_as_table_markup():
     text = "{{linktext|偉大|}}한 {{linktext|遺産|}}"
+    multiline_template = "{{#if:1\n|yes\n|}}\nafter"
+    parameter = "{{{name\n|default\n|}}}\nafter"
+    template_in_table = "{|\n|-\n| {{#if:1\n|yes\n|}}\n|}\nafter"
 
     assert split_into_paragraphs(text) == [text]
+    assert split_into_paragraphs(multiline_template) == [multiline_template]
+    assert split_into_paragraphs(parameter) == [parameter]
+    assert any(
+        "{{#if:1\n|yes\n|}}" in paragraph
+        for paragraph in split_into_paragraphs(template_in_table)
+    )
     assert "{|\n| cell\n|}" in split_into_paragraphs("{|\n| cell\n|}")
-    _propose_structural_word_matches,
-    _propose_structural_word_matches_document,
-    _propose_structural_word_matches_slots,

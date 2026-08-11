@@ -43,9 +43,9 @@ def split_into_paragraphs(text):
     text = text.replace('<tr>', '\n\n<tr>').replace('</tr>', '</tr>\n\n')
     # wp table syntax
     text = text.replace('{|', '\n\n{|')
-    # Match table-closing markup only at line starts, preserving inline
-    # template endings such as `{{linktext|text|}}`.
-    text = re.sub(r'(?m)^([ \t]*\|\})', r'\1\n\n', text)
+    # Treat a line-start `|}}` as a template ending. It is ambiguous with a
+    # table close followed by a literal `}`, which this fast path cannot parse.
+    text = re.sub(r'(?m)^([ \t]*\|\})(?!\})', r'\1\n\n', text)
     text = text.replace('|-\n', '\n\n|-\n')
     return text.split('\n\n')
 

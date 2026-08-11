@@ -396,6 +396,44 @@
           "origin_rev_ids": [1028074078, 1028074078, 1028074078, 1028074078, 1028074078, 1028074078, 1028074078, 1028074078, 1028074078, 1028074078, 1028074078, 1028074078, 1028074078, 1028074078, 1028074078, 1028074078],
           "last_rev_ids": [1222367802, 1222367802, 1222367802, 1222367802, 1222367802, 1222367802, 1222367802, 1222367802, 1222367802, 1222367802, 1222367802, 1222367802, 1222367802, 1222367802, 1222367802, 1222367802]
         }
+      },
+      {
+        "id": "colosio_citation_date_survives_field_reorder",
+        "context": "{{cite news |date=8 June 2021 |title=Colosio, Vizcaíno, Marina y Cerqueda",
+        "focus": ["8 June 2021"],
+        "expected": {
+          "values": ["8", "june", "2021"],
+          "origin_rev_ids": [1028074078, 1028074078, 1028074078],
+          "last_rev_ids": [1222367802, 1222367802, 1222367802]
+        }
+      },
+      {
+        "id": "colosio_second_citation_date_survives_field_reorder",
+        "context": "|last=Pacheco |first=Gustavo |date=23 March 2019 |title=Esto ha pasado",
+        "focus": ["23 March 2019"],
+        "expected": {
+          "values": ["23", "march", "2019"],
+          "origin_rev_ids": [1028090673, 1028090673, 1028090673],
+          "last_rev_ids": [1222367802, 1222367802, 1222367802]
+        }
+      }
+    ]
+  },
+  {
+    "title": "Luis Donaldo Colosio Riojas",
+    "fixture": "fixtures/luis_donaldo_colosio_riojas_revisions.json",
+    "history_through_revid": 1347221443,
+    "snapshot_revid": 1347221443,
+    "cases": [
+      {
+        "id": "colosio_term_start_survives_infobox_restructure",
+        "context": "|term_start2=4 June 2024 |term_end2=22 August 2024",
+        "focus": ["4 June 2024"],
+        "expected": {
+          "values": ["4", "june", "2024"],
+          "origin_rev_ids": [1227424767, 1227424767, 1227424767],
+          "last_rev_ids": [1347221443, 1347221443, 1347221443]
+        }
       }
     ]
   },

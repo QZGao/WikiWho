@@ -1596,7 +1596,9 @@ paragraph_line_close_end(PyObject *text, Py_ssize_t line_start,
     }
     if (index + 1 < length &&
             PyUnicode_READ_CHAR(text, index) == '|' &&
-            PyUnicode_READ_CHAR(text, index + 1) == '}') {
+            PyUnicode_READ_CHAR(text, index + 1) == '}' &&
+            (index + 2 >= length ||
+             PyUnicode_READ_CHAR(text, index + 2) != '}')) {
         return index + 2;
     }
     return -1;
