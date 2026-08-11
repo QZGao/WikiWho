@@ -777,17 +777,24 @@ def _raw_context_ngram_sizes(prev_len, curr_len):
     return sizes
 
 
+_TEMPLATE_PIPE_KEY_KINDS = frozenset(('template-field', 'template-arg'))
+
+
+def _is_template_pipe_key(key):
+    return (isinstance(key, tuple) and len(key) == 5 and
+            key[:2] == ('wikitext', '|') and
+            key[2] in _TEMPLATE_PIPE_KEY_KINDS and
+            isinstance(key[3], tuple))
+
+
 def _pipe_key_changed_only_by_template_spacing(prev_key, curr_key):
-    if not isinstance(prev_key, tuple) or not isinstance(curr_key, tuple):
-        return False
-    if len(prev_key) < 5 or len(curr_key) < 5:
+    if not (_is_template_pipe_key(prev_key) and
+            _is_template_pipe_key(curr_key)):
         return False
     if prev_key[:3] != curr_key[:3] or prev_key[4:] != curr_key[4:]:
         return False
     prev_name = prev_key[3]
     curr_name = curr_key[3]
-    if not isinstance(prev_name, tuple) or not isinstance(curr_name, tuple):
-        return False
     return prev_name != curr_name and ''.join(prev_name) == ''.join(curr_name)
 
 
@@ -796,8 +803,7 @@ def _has_template_name_spacing_change(prev_keys, curr_keys):
     for keys in (prev_keys, curr_keys):
         by_compact_name = defaultdict(set)
         for key in keys:
-            if (isinstance(key, tuple) and len(key) >= 5 and
-                    key[:2] == ('wikitext', '|') and isinstance(key[3], tuple)):
+            if _is_template_pipe_key(key):
                 by_compact_name[''.join(key[3])].add(key[3])
         forms.append(by_compact_name)
 

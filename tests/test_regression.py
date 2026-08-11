@@ -9,9 +9,13 @@ from WikiWho.structures import Word
 from WikiWho.wikiwho import (
     Wikiwho,
     _can_partially_restore_historical_sentence,
+    _has_template_name_spacing_change,
     _match_word_sequences,
+    _pipe_key_changed_only_by_template_spacing,
+    _recover_unique_template_field_words,
+    _word_match_keys,
 )
-from WikiWho.utils import split_into_paragraphs
+from WikiWho.utils import split_into_paragraphs, split_into_tokens
 
 FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
 
@@ -126,6 +130,89 @@ def test_reference_markup_does_not_strengthen_a_weak_move_anchor():
     )
 
     assert mapping[current.index("across")] is None
+
+
+def test_link_pipe_keys_do_not_trigger_template_spacing_recovery():
+    previous_link = [
+        token.lower()
+        for token in split_into_tokens("[[File:Foo bar.jpg|thumb|caption]]")
+    ]
+    current_link = [
+        token.lower()
+        for token in split_into_tokens("[[File:Foobar.jpg|thumb|caption]]")
+    ]
+    previous_keys = _word_match_keys(previous_link)
+    current_keys = _word_match_keys(current_link)
+    previous_pipes = [
+        key for token, key in zip(previous_link, previous_keys) if token == "|"
+    ]
+    current_pipes = [
+        key for token, key in zip(current_link, current_keys) if token == "|"
+    ]
+
+    assert len(previous_pipes) == len(current_pipes) == 2
+    assert not _has_template_name_spacing_change(previous_keys, current_keys)
+    assert all(
+        not _pipe_key_changed_only_by_template_spacing(previous_key, current_key)
+        for previous_key, current_key in zip(previous_pipes, current_pipes)
+    )
+
+    previous = (
+        [f"previous{index}" for index in range(8)]
+        + previous_link
+        + [f"suffix{index}" for index in range(8)]
+    )
+    current = (
+        [f"current{index}" for index in range(8)]
+        + current_link
+        + [f"ending{index}" for index in range(8)]
+    )
+    mapping = [None] * len(current)
+    match_confidence = [0] * len(current)
+    _recover_unique_template_field_words(
+        previous,
+        current,
+        _word_match_keys(previous),
+        _word_match_keys(current),
+        mapping,
+        match_confidence,
+        {},
+        full_text_prev=previous,
+        full_text_curr=current,
+        count_state={"counts": {}},
+    )
+
+    assert mapping[current.index("thumb")] is None
+
+
+def test_template_pipe_keys_still_detect_template_name_spacing_change():
+    previous = [
+        token.lower()
+        for token in split_into_tokens("{{single chart|country=switzerland|62}}")
+    ]
+    current = [
+        token.lower()
+        for token in split_into_tokens("{{singlechart|country=switzerland|62}}")
+    ]
+    previous_keys = _word_match_keys(previous)
+    current_keys = _word_match_keys(current)
+    previous_pipes = [
+        key for token, key in zip(previous, previous_keys) if token == "|"
+    ]
+    current_pipes = [
+        key for token, key in zip(current, current_keys) if token == "|"
+    ]
+
+    assert len(previous_pipes) == len(current_pipes) == 2
+    assert {key[2] for key in previous_pipes} == {
+        "template-field",
+        "template-arg",
+    }
+    assert _has_template_name_spacing_change(previous_keys, current_keys)
+    assert all(
+        _pipe_key_changed_only_by_template_spacing(previous_key, current_key)
+        for previous_key, current_key in zip(previous_pipes, current_pipes)
+    )
 
 
 def test_delayed_sentence_reinsertion_can_restore_available_token_identities():
