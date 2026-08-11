@@ -268,6 +268,15 @@ def test_partially_restored_sentence_is_registered_for_future_reuse():
 
 def test_inline_template_end_is_not_split_as_table_markup():
     text = "{{linktext|偉大|}}한 {{linktext|遺産|}}"
+    multiline_template = "{{#if:1\n|yes\n|}}\nafter"
+    parameter = "{{{name\n|default\n|}}}\nafter"
+    template_in_table = "{|\n|-\n| {{#if:1\n|yes\n|}}\n|}\nafter"
 
     assert split_into_paragraphs(text) == [text]
+    assert split_into_paragraphs(multiline_template) == [multiline_template]
+    assert split_into_paragraphs(parameter) == [parameter]
+    assert any(
+        "{{#if:1\n|yes\n|}}" in paragraph
+        for paragraph in split_into_paragraphs(template_in_table)
+    )
     assert "{|\n| cell\n|}" in split_into_paragraphs("{|\n| cell\n|}")
