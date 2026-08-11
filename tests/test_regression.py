@@ -15,7 +15,7 @@ from WikiWho.wikiwho import (
     _recover_unique_template_field_words,
     _word_match_keys,
 )
-from WikiWho.utils import split_into_paragraphs, split_into_tokens
+from WikiWho.utils import iter_rev_tokens, split_into_paragraphs, split_into_tokens
 
 FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
 
@@ -71,6 +71,40 @@ def test_token_authorship_matches_golden(title):
         assert got == want, (
             f"token[{i}] ({got['str']!r}) mismatch:\n  got:  {got}\n  want: {want}"
         )
+
+
+def test_three_word_link_run_preserves_adam_authorship():
+    revisions, _ = load_fixture("Adam Himebauch")
+    previous_revision_id = 748557058
+    current_revision_id = 754869525
+    current_index = next(
+        index for index, revision in enumerate(revisions)
+        if revision["revid"] == current_revision_id
+    )
+    wikiwho = Wikiwho("Adam Himebauch")
+    wikiwho.analyse_article(revisions[:current_index + 1])
+    phrase = (
+        "a", "building", "in", "[[", "little", "italy", ",",
+        "manhattan", "|", "little", "italy", "]]",
+    )
+
+    def phrase_words(revision_id):
+        words = list(iter_rev_tokens(wikiwho.revisions[revision_id]))
+        values = tuple(word.value for word in words)
+        starts = [
+            start for start in range(len(values) - len(phrase) + 1)
+            if values[start:start + len(phrase)] == phrase
+        ]
+        assert len(starts) == 1
+        return words[starts[0]:starts[0] + len(phrase)]
+
+    previous_words = phrase_words(previous_revision_id)
+    current_words = phrase_words(current_revision_id)
+
+    assert [word.token_id for word in current_words] == [
+        word.token_id for word in previous_words
+    ]
+    assert {word.origin_rev_id for word in current_words} == {678462685}
 
 
 def test_moved_words_before_link_are_recovered():

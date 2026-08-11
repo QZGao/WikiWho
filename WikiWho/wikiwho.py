@@ -51,6 +51,10 @@ WORD_MATCH_CONF_EDGE = 100
 
 # Moved-run recovery looks for unique informative n-grams in unmatched diff regions. The sizes/caps below bound how much extra indexing we do per word diff while still finding copied or moved runs that SequenceMatcher misses.
 WORD_MATCH_MOVE_NGRAM_SIZES = (10, 8, 6, 4, 3)
+# Run admission and per-token coverage use different evidence floors. An
+# unstructured content core needs four informative tokens to admit a moved run
+# by itself. After separate structural evidence admits the run, unique windows
+# with three informative tokens can provide per-token coverage.
 WORD_MATCH_MOVE_MIN_INFO_TOKENS = 3
 WORD_MATCH_MOVE_MIN_ANCHOR_INFO_TOKENS = 4
 WORD_MATCH_MOVE_MIN_RECOVERABLE_TOKENS = 24
@@ -1162,19 +1166,19 @@ def _recover_moved_word_runs(text_prev, text_curr, prev_keys, curr_keys,
                 continue
 
             confidence = _moved_run_confidence(length, ngram_size)
-            needs_link_context = (
+            requires_complete_link_window = (
                 len(_longest_content_core(text_curr[curr_start:curr_start + length])) <
                 WORD_MATCH_MOVE_MIN_INFO_TOKENS
             )
             covered = None
-            if not needs_link_context:
+            if not requires_complete_link_window:
                 covered = _unique_moved_run_coverage(
                     count_text_prev, count_text_curr, text_curr,
                     curr_start, curr_start + length, count_state,
                 )
             for offset in range(length):
                 curr_index = curr_start + offset
-                if needs_link_context:
+                if requires_complete_link_window:
                     if not _has_unique_link_move_window(
                             count_text_prev, count_text_curr, text_curr,
                             curr_index, curr_start, curr_start + length,
