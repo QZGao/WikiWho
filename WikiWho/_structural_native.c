@@ -75,6 +75,35 @@ typedef struct {
     size_t used;
 } PointerSet;
 
+/* Call-scoped raw snapshots.  Token values remain owned by the previous
+ * document list; only hierarchy identities and compact offsets are cached. */
+typedef struct {
+    PyObject *sentence;
+    Py_ssize_t value_length;
+    Py_ssize_t word_count;
+} CachedSentence;
+
+typedef struct {
+    uintptr_t paragraph;
+    Py_ssize_t value_start;
+    Py_ssize_t sentence_start;
+    Py_ssize_t sentence_count;
+    Py_ssize_t word_start;
+} CachedParagraph;
+
+typedef struct {
+    CachedParagraph *paragraphs;
+    size_t paragraph_capacity;
+    CachedSentence *sentences;
+    size_t sentence_count;
+    size_t sentence_capacity;
+    PyObject **words;
+    size_t word_count;
+    size_t word_capacity;
+    PyObject *values;
+    PyObject *current_paragraphs;
+} ParagraphCache;
+
 /* Shared immutable labels used in contextual token keys.  Py_BuildValue's
  * ``s`` format creates a fresh Unicode object on every call; these labels are
  * constants, so allocating them per structural token adds traced allocations
@@ -336,6 +365,200 @@ pointer_set_add(PointerSet *set, PyObject *object)
     set->entries[slot] = pointer;
     set->used++;
     return 1;
+}
+
+static int
+paragraph_cache_init(ParagraphCache *cache, PyObject *current,
+                     size_t expected_paragraphs)
+{
+    size_t capacity = 16;
+    size_t target;
+    if (expected_paragraphs > (SIZE_MAX - 1) / 2) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    target = expected_paragraphs + expected_paragraphs / 2 + 1;
+    while (capacity < target) {
+        if (capacity > SIZE_MAX / 2) {
+            PyErr_NoMemory();
+            return -1;
+        }
+        capacity *= 2;
+    }
+    cache->paragraphs = (CachedParagraph *)calloc(
+        capacity, sizeof(CachedParagraph)
+    );
+    if (cache->paragraphs == NULL) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    cache->paragraph_capacity = capacity;
+    cache->current_paragraphs = PyObject_GetAttr(
+        current, attr_paragraphs
+    );
+    if (cache->current_paragraphs == NULL) {
+        return -1;
+    }
+    return 0;
+}
+
+static void
+paragraph_cache_clear(ParagraphCache *cache)
+{
+    size_t index;
+    for (index = 0; index < cache->sentence_count; index++) {
+        Py_DECREF(cache->sentences[index].sentence);
+    }
+    for (index = 0; index < cache->word_count; index++) {
+        Py_DECREF(cache->words[index]);
+    }
+    free(cache->paragraphs);
+    free(cache->sentences);
+    free(cache->words);
+    Py_XDECREF(cache->current_paragraphs);
+    memset(cache, 0, sizeof(*cache));
+}
+
+static int
+paragraph_cache_may_reuse(ParagraphCache *cache, PyObject *paragraph_hash)
+{
+    if (!PyDict_Check(cache->current_paragraphs)) {
+        return 0;
+    }
+    return PyDict_Contains(cache->current_paragraphs, paragraph_hash);
+}
+
+static int
+paragraph_cache_reserve_sentences(ParagraphCache *cache, size_t needed)
+{
+    size_t capacity = cache->sentence_capacity ?
+        cache->sentence_capacity : 256;
+    CachedSentence *sentences;
+    while (capacity < needed) {
+        if (capacity > SIZE_MAX / 2) {
+            PyErr_NoMemory();
+            return -1;
+        }
+        capacity *= 2;
+    }
+    if (capacity == cache->sentence_capacity) {
+        return 0;
+    }
+    if (capacity > SIZE_MAX / sizeof(CachedSentence)) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    sentences = (CachedSentence *)realloc(
+        cache->sentences, capacity * sizeof(CachedSentence)
+    );
+    if (sentences == NULL) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    cache->sentences = sentences;
+    cache->sentence_capacity = capacity;
+    return 0;
+}
+
+static int
+paragraph_cache_reserve_words(ParagraphCache *cache, size_t needed)
+{
+    size_t capacity = cache->word_capacity ? cache->word_capacity : 1024;
+    PyObject **words;
+    while (capacity < needed) {
+        if (capacity > SIZE_MAX / 2) {
+            PyErr_NoMemory();
+            return -1;
+        }
+        capacity *= 2;
+    }
+    if (capacity == cache->word_capacity) {
+        return 0;
+    }
+    if (capacity > SIZE_MAX / sizeof(PyObject *)) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    words = (PyObject **)realloc(
+        cache->words, capacity * sizeof(PyObject *)
+    );
+    if (words == NULL) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    cache->words = words;
+    cache->word_capacity = capacity;
+    return 0;
+}
+
+static int
+paragraph_cache_append_word(ParagraphCache *cache, PyObject *word)
+{
+    if (paragraph_cache_reserve_words(
+            cache, cache->word_count + 1) < 0) {
+        return -1;
+    }
+    Py_INCREF(word);
+    cache->words[cache->word_count++] = word;
+    return 0;
+}
+
+static int
+paragraph_cache_append_sentence(
+        ParagraphCache *cache, PyObject *sentence,
+        Py_ssize_t value_length, Py_ssize_t word_count)
+{
+    CachedSentence *cached;
+    if (paragraph_cache_reserve_sentences(
+            cache, cache->sentence_count + 1) < 0) {
+        return -1;
+    }
+    cached = &cache->sentences[cache->sentence_count++];
+    Py_INCREF(sentence);
+    cached->sentence = sentence;
+    cached->value_length = value_length;
+    cached->word_count = word_count;
+    return 0;
+}
+
+static int
+paragraph_cache_insert(
+        ParagraphCache *cache, PyObject *paragraph,
+        Py_ssize_t value_start, Py_ssize_t sentence_start,
+        Py_ssize_t sentence_count, Py_ssize_t word_start)
+{
+    uintptr_t pointer = (uintptr_t)paragraph;
+    size_t slot = pointer_hash(pointer) &
+        (cache->paragraph_capacity - 1);
+    CachedParagraph *cached;
+    while (cache->paragraphs[slot].paragraph) {
+        if (cache->paragraphs[slot].paragraph == pointer) {
+            return 0;
+        }
+        slot = (slot + 1) & (cache->paragraph_capacity - 1);
+    }
+    cached = &cache->paragraphs[slot];
+    cached->paragraph = pointer;
+    cached->value_start = value_start;
+    cached->sentence_start = sentence_start;
+    cached->sentence_count = sentence_count;
+    cached->word_start = word_start;
+    return 1;
+}
+
+static CachedParagraph *
+paragraph_cache_lookup(ParagraphCache *cache, PyObject *paragraph)
+{
+    uintptr_t pointer = (uintptr_t)paragraph;
+    size_t slot = pointer_hash(pointer) &
+        (cache->paragraph_capacity - 1);
+    while (cache->paragraphs[slot].paragraph) {
+        if (cache->paragraphs[slot].paragraph == pointer) {
+            return &cache->paragraphs[slot];
+        }
+        slot = (slot + 1) & (cache->paragraph_capacity - 1);
+    }
+    return NULL;
 }
 
 static int
@@ -2121,7 +2344,8 @@ ordered_occurrence(PyObject *mapping, PyObject *counts, PyObject *key,
  * hierarchy consistency checks. */
 static int
 append_sentence_values(PyObject *sentence, PyObject *values,
-                       PointerSet *seen_words, Py_ssize_t *sentence_start,
+                       PointerSet *seen_words, ParagraphCache *cache,
+                       Py_ssize_t *sentence_start,
                        Py_ssize_t *sentence_length)
 {
     PyObject *words = PyObject_GetAttr(sentence, attr_words);
@@ -2166,6 +2390,11 @@ append_sentence_values(PyObject *sentence, PyObject *values,
             int added = pointer_set_add(seen_words, word);
             if (added <= 0) {
                 status = added;
+                goto done;
+            }
+            if (cache != NULL &&
+                    paragraph_cache_append_word(cache, word) < 0) {
+                status = -1;
                 goto done;
             }
             value = PyObject_GetAttr(word, attr_value);
@@ -2220,10 +2449,103 @@ done:
     return status;
 }
 
+static int
+append_cached_paragraph(
+        ParagraphCache *cache, CachedParagraph *paragraph,
+        PyObject *targets, Py_ssize_t paragraph_index, PyObject *values,
+        PyObject *paragraph_ranges, PyObject *sentence_ranges,
+        PointerSet *seen_sentences, PointerSet *seen_words)
+{
+    Py_ssize_t paragraph_start = PyList_GET_SIZE(values);
+    Py_ssize_t value_cursor = paragraph->value_start;
+    Py_ssize_t word_cursor = paragraph->word_start;
+    Py_ssize_t sentence_offset;
+    for (sentence_offset = 0;
+            sentence_offset < paragraph->sentence_count;
+            sentence_offset++) {
+        CachedSentence *sentence = &cache->sentences[
+            paragraph->sentence_start + sentence_offset
+        ];
+        Py_ssize_t word_offset;
+        Py_ssize_t value_offset;
+        Py_ssize_t sentence_start;
+        int status = pointer_set_add(
+            seen_sentences, sentence->sentence
+        );
+        int retain;
+        if (status <= 0) {
+            return status;
+        }
+        for (word_offset = 0;
+                word_offset < sentence->word_count;
+                word_offset++) {
+            status = pointer_set_add(
+                seen_words, cache->words[word_cursor + word_offset]
+            );
+            if (status <= 0) {
+                return status;
+            }
+        }
+        sentence_start = PyList_GET_SIZE(values);
+        for (value_offset = 0;
+                value_offset < sentence->value_length;
+                value_offset++) {
+            if (PyList_Append(
+                    values, PyList_GET_ITEM(
+                        cache->values,
+                        value_cursor + value_offset
+                    )) < 0) {
+                return -1;
+            }
+        }
+        word_cursor += sentence->word_count;
+        value_cursor += sentence->value_length;
+        if (targets == Py_None) {
+            retain = 1;
+        } else {
+            retain = PySet_Contains(targets, sentence->sentence);
+            if (retain < 0) {
+                return -1;
+            }
+        }
+        if (retain) {
+            PyObject *range = Py_BuildValue(
+                "(nnnn)", paragraph_index, sentence_offset,
+                sentence_start, sentence->value_length
+            );
+            if (range == NULL || PyDict_SetItem(
+                    sentence_ranges, sentence->sentence, range) < 0) {
+                Py_XDECREF(range);
+                return -1;
+            }
+            Py_DECREF(range);
+        }
+    }
+    {
+        PyObject *paragraph_key = PyLong_FromSsize_t(paragraph_index);
+        PyObject *paragraph_range = Py_BuildValue(
+            "(nn)", paragraph_start, PyList_GET_SIZE(values)
+        );
+        if (paragraph_key == NULL || paragraph_range == NULL ||
+                PyDict_SetItem(
+                    paragraph_ranges, paragraph_key,
+                    paragraph_range) < 0) {
+            Py_XDECREF(paragraph_key);
+            Py_XDECREF(paragraph_range);
+            return -1;
+        }
+        Py_DECREF(paragraph_key);
+        Py_DECREF(paragraph_range);
+    }
+    return 1;
+}
+
 /* Return 1 with owned outputs, 0 for fail-closed hierarchy state, and -1 for
  * an exception. */
 static int
 build_structural_document(PyObject *revision, PyObject *targets,
+                          ParagraphCache *cache, int populate_cache,
+                          PyObject *cache_peer,
                           PyObject **values_result,
                           PyObject **paragraph_ranges_result,
                           PyObject **sentence_ranges_result)
@@ -2250,6 +2572,11 @@ build_structural_document(PyObject *revision, PyObject *targets,
     if (!PyList_Check(ordered_paragraphs) || !PyDict_Check(paragraphs) ||
             (targets != Py_None && !PyAnySet_Check(targets))) {
         status = 0;
+        goto done;
+    }
+    if (populate_cache && paragraph_cache_init(
+            cache, cache_peer,
+            (size_t)PyList_GET_SIZE(ordered_paragraphs)) < 0) {
         goto done;
     }
     paragraph_counts = PyDict_New();
@@ -2280,7 +2607,12 @@ build_structural_document(PyObject *revision, PyObject *targets,
         PyObject *paragraph_key = NULL;
         PyObject *paragraph_range = NULL;
         Py_ssize_t paragraph_start = PyList_GET_SIZE(values);
+        Py_ssize_t cached_sentence_start = populate_cache ?
+            (Py_ssize_t)cache->sentence_count : 0;
+        Py_ssize_t cached_word_start = populate_cache ?
+            (Py_ssize_t)cache->word_count : 0;
         Py_ssize_t sentence_index;
+        int cache_paragraph = 0;
         int occurrence_status = ordered_occurrence(
             paragraphs, paragraph_counts, paragraph_hash, &paragraph
         );
@@ -2288,10 +2620,35 @@ build_structural_document(PyObject *revision, PyObject *targets,
             status = occurrence_status;
             goto done;
         }
+        if (populate_cache) {
+            cache_paragraph = paragraph_cache_may_reuse(
+                cache, paragraph_hash
+            );
+            if (cache_paragraph < 0) {
+                goto done;
+            }
+        }
         occurrence_status = pointer_set_add(&seen_paragraphs, paragraph);
         if (occurrence_status <= 0) {
             status = occurrence_status;
             goto done;
+        }
+        if (!populate_cache) {
+            CachedParagraph *cached = paragraph_cache_lookup(
+                cache, paragraph
+            );
+            if (cached != NULL) {
+                occurrence_status = append_cached_paragraph(
+                    cache, cached, targets, paragraph_index, values,
+                    paragraph_ranges, sentence_ranges,
+                    &seen_sentences, &seen_words
+                );
+                if (occurrence_status <= 0) {
+                    status = occurrence_status;
+                    goto done;
+                }
+                continue;
+            }
         }
         ordered_sentences = PyObject_GetAttr(
             paragraph, attr_ordered_sentences
@@ -2323,6 +2680,8 @@ build_structural_document(PyObject *revision, PyObject *targets,
             PyObject *sentence;
             Py_ssize_t sentence_start;
             Py_ssize_t sentence_length;
+            Py_ssize_t cached_sentence_word_start = populate_cache ?
+                (Py_ssize_t)cache->word_count : 0;
             int retain;
             occurrence_status = ordered_occurrence(
                 sentences, sentence_counts, sentence_hash, &sentence
@@ -2346,6 +2705,7 @@ build_structural_document(PyObject *revision, PyObject *targets,
             }
             occurrence_status = append_sentence_values(
                 sentence, values, &seen_words,
+                cache_paragraph ? cache : NULL,
                 &sentence_start, &sentence_length
             );
             if (occurrence_status <= 0) {
@@ -2353,6 +2713,15 @@ build_structural_document(PyObject *revision, PyObject *targets,
                 Py_DECREF(ordered_sentences);
                 Py_DECREF(sentences);
                 status = occurrence_status;
+                goto done;
+            }
+            if (cache_paragraph && paragraph_cache_append_sentence(
+                    cache, sentence, sentence_length,
+                    (Py_ssize_t)cache->word_count -
+                        cached_sentence_word_start) < 0) {
+                Py_DECREF(sentence_counts);
+                Py_DECREF(ordered_sentences);
+                Py_DECREF(sentences);
                 goto done;
             }
             if (targets == Py_None) {
@@ -2385,6 +2754,19 @@ build_structural_document(PyObject *revision, PyObject *targets,
         Py_DECREF(sentence_counts);
         Py_DECREF(ordered_sentences);
         Py_DECREF(sentences);
+        if (cache_paragraph) {
+            occurrence_status = paragraph_cache_insert(
+                cache, paragraph, paragraph_start,
+                cached_sentence_start,
+                (Py_ssize_t)cache->sentence_count -
+                    cached_sentence_start,
+                cached_word_start
+            );
+            if (occurrence_status <= 0) {
+                status = occurrence_status;
+                goto done;
+            }
+        }
         paragraph_key = PyLong_FromSsize_t(paragraph_index);
         paragraph_range = Py_BuildValue(
             "(nn)", paragraph_start, PyList_GET_SIZE(values)
@@ -2435,6 +2817,7 @@ document_pair(PyObject *self, PyObject *args)
     PyObject *curr_paragraph_ranges = NULL;
     PyObject *curr_sentence_ranges = NULL;
     PyObject *result = NULL;
+    ParagraphCache cache = {0};
     int status;
     if (!PyArg_ParseTuple(
             args, "OOOO:document_pair", &previous, &current,
@@ -2442,23 +2825,26 @@ document_pair(PyObject *self, PyObject *args)
         return NULL;
     }
     status = build_structural_document(
-        previous, previous_targets, &prev_values,
+        previous, previous_targets, &cache, 1, current, &prev_values,
         &prev_paragraph_ranges, &prev_sentence_ranges
     );
     if (status < 0) {
         goto error;
     }
     if (!status) {
+        paragraph_cache_clear(&cache);
         Py_RETURN_NONE;
     }
+    cache.values = prev_values;
     status = build_structural_document(
-        current, current_targets, &curr_values,
+        current, current_targets, &cache, 0, NULL, &curr_values,
         &curr_paragraph_ranges, &curr_sentence_ranges
     );
     if (status < 0) {
         goto error;
     }
     if (!status) {
+        paragraph_cache_clear(&cache);
         Py_DECREF(prev_values);
         Py_DECREF(prev_paragraph_ranges);
         Py_DECREF(prev_sentence_ranges);
@@ -2470,6 +2856,7 @@ document_pair(PyObject *self, PyObject *args)
     );
 
 error:
+    paragraph_cache_clear(&cache);
     Py_XDECREF(prev_values);
     Py_XDECREF(prev_paragraph_ranges);
     Py_XDECREF(prev_sentence_ranges);
