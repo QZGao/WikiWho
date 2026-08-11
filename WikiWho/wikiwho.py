@@ -54,6 +54,7 @@ WORD_MATCH_MOVE_NGRAM_SIZES = (10, 8, 6, 4, 3)
 WORD_MATCH_MOVE_MIN_INFO_TOKENS = 3
 WORD_MATCH_MOVE_MIN_ANCHOR_INFO_TOKENS = 4
 WORD_MATCH_MOVE_MIN_RECOVERABLE_TOKENS = 24
+WORD_MATCH_MOVE_MIN_LINK_WINDOW = 6
 WORD_MATCH_MOVE_MAX_WINDOWS = 300000
 
 # Partial historical-sentence restoration needs enough unchanged context to make the old sentence identity stronger than the few token identities already occupied elsewhere.
@@ -668,9 +669,8 @@ def _copy_safe_moved_run(count_text_prev, count_text_curr, text_curr, curr_start
 
 def _has_unique_link_move_window(count_text_prev, count_text_curr, text_curr,
                                  curr_index, run_start, run_end, count_state):
-    for ngram_size in WORD_MATCH_MOVE_NGRAM_SIZES:
-        if ngram_size > run_end - run_start:
-            continue
+    max_window = min(run_end - run_start, max(WORD_MATCH_MOVE_NGRAM_SIZES))
+    for ngram_size in range(max_window, WORD_MATCH_MOVE_MIN_LINK_WINDOW - 1, -1):
         earliest = max(run_start, curr_index - ngram_size + 1)
         latest = min(curr_index, run_end - ngram_size)
         for start in range(earliest, latest + 1):
